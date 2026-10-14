@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -85,6 +86,28 @@ public abstract class DriveActivity extends Activity {
         bar.setMax(100);
         bar.setProgressTintList(ColorStateList.valueOf(accent()));
         root.addView(bar, new FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP));
+
+        // Nút "<" đậm giữa hàng tiêu đề, bấm để quay lại (hết lịch sử thì về màn hình chính)
+        TextView back = new TextView(this);
+        back.setText("<");
+        back.setTextColor(Color.WHITE);
+        back.setTextSize(26);
+        back.setTypeface(Typeface.DEFAULT_BOLD);
+        back.setGravity(Gravity.CENTER);
+        GradientDrawable pill = new GradientDrawable();
+        pill.setColor(0xCC202124);
+        pill.setCornerRadius(dp(18));
+        GradientDrawable mask = new GradientDrawable();
+        mask.setColor(Color.WHITE);
+        mask.setCornerRadius(dp(18));
+        back.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), pill, mask));
+        back.setElevation(dp(4));
+        back.setClickable(true);
+        back.setOnClickListener(v -> onBackPressed());
+        FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(dp(64), dp(36),
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        bp.topMargin = dp(6);
+        root.addView(back, bp);
 
         setContentView(root);
     }
