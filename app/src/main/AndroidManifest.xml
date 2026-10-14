@@ -48,6 +48,22 @@
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
 
+        <!-- Android < 9: 3 hồ sơ chạy CHUNG process chính (không có android:process), vì máy cũ
+             không tách được thư mục dữ liệu WebView theo process. Đăng nhập được tách bằng cách đổi
+             cookie theo hồ sơ (xem DriveCookies.java). -->
+        <activity
+            android:name=".LegacyPhotoActivity"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+        <activity
+            android:name=".LegacyVideoActivity"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+        <activity
+            android:name=".LegacyFileActivity"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+
         <!-- Dịch vụ nền giữ tải lên: phải cùng process với trang Drive thì process đó mới khó bị hệ thống tắt -->
         <service
             android:name=".UploadService$P1"
@@ -62,6 +78,11 @@
         <service
             android:name=".UploadService$P3"
             android:process=":p3"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- Cho các hồ sơ Legacy (chạy trong process chính) -->
+        <service
+            android:name=".UploadService$L"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
     </application>

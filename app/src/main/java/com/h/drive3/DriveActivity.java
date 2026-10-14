@@ -93,14 +93,38 @@ public abstract class DriveActivity extends Activity {
             } catch (IllegalStateException ignored) { }
         }
 
+        // Android < 9: 3 hồ sơ chạy chung 1 process nên đăng nhập được tách bằng cách đổi cookie
+        // (xem DriveCookies). Việc đổi cookie sẽ làm đứt tải lên của hồ sơ khác, nên chặn mở hồ sơ
+        // này khi hồ sơ kia còn đang tải lên dở.
+        if (DriveCookies.enabled()) {
+            String busyProfile = DriveCookies.uploading();
+            if (!busyProfile.isEmpty() && !busyProfile.equals(suffix())) {
+                toast("Đang tải lên ở hồ sơ " + profileName(busyProfile)
+                        + " – đợi tải xong rồi mở hồ sơ này");
+                finish();
+                return;
+            }
+            CookieManager.getInstance().setAcceptCookie(true);
+            DriveCookies.activate(this, suffix()); // PHẢI chạy trước khi tạo WebView
+        }
+
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setNavigationBarColor(RAIL_BG);
 
         buildUi();
         setupWebView();
         web.loadUrl(startUrl());
-        if (getIntent().getBooleanExtra("sync", false)) pickFiles();
+        // Chỉ mở trình chọn tệp lần đầu, không lặp lại khi activity được dựng lại (recreate)
+        if (b == null && getIntent().getBooleanExtra("sync", false)) pickFiles();
         else askPerms();
+    }
+
+    private static String profileName(String suffix) {
+        switch (suffix) {
+            case "anh": return "Ảnh";
+            case "video": return "Video";
+            default: return "Tệp";
+        }
     }
 
     /** Xin quyền thông báo (Android 13+) và ghi thư mục Download (Android 7–9). */
@@ -247,6 +271,8 @@ public abstract class DriveActivity extends Activity {
     }
 
     private Class<?> serviceClass() {
+        // Hồ sơ Legacy chạy trong process chính nên dịch vụ nền cũng phải ở process chính
+        if (DriveCookies.enabled()) return UploadService.L.class;
         switch (suffix()) {
             case "anh": return UploadService.P1.class;
             case "video": return UploadService.P2.class;
@@ -264,6 +290,7 @@ public abstract class DriveActivity extends Activity {
         idlePolls = 0;
         stalePolls = 0;
         lastBytes = 0;
+        DriveCookies.setUploading(suffix()); // Android < 9: khoá việc đổi hồ sơ cho tới khi tải xong
         web.evaluateJavascript(UP_JS, null);
         web.evaluateJavascript("if(window.__d3reset)window.__d3reset();", null);
 
@@ -347,6 +374,7 @@ public abstract class DriveActivity extends Activity {
     private void finishUpload(boolean ok) {
         tracking = false;
         ui.removeCallbacks(poll);
+        if (suffix().equals(DriveCookies.uploading())) DriveCookies.setUploading("");
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         upBox.setVisibility(View.GONE);
         try { stopService(new Intent(this, serviceClass())); } catch (Exception ignored) { }
@@ -467,8 +495,17 @@ public abstract class DriveActivity extends Activity {
         cm.setAcceptThirdPartyCookies(web, true);
 
         web.setWebViewClient(new WebViewClient() {
+            // Android < 9: ghi nhớ các tên miền hồ sơ này đã truy cập để lưu/nạp lại cookie đúng chỗ
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView v, WebResourceRequest r) {
+                if (DriveCookies.enabled()) DriveCookies.noteHost(r.getUrl().getHost());
+                return super.shouldInterceptRequest(v, r);
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                if (DriveCookies.enabled()) DriveCookies.noteHost(r.getUrl().getHost());
                 String sch = r.getUrl().getScheme();
                 return !("http".equals(sch) || "https".equals(sch));
             }
@@ -676,13 +713,27 @@ public abstract class DriveActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (DriveCookies.enabled()) DriveCookies.captureIfActive(this, suffix());
         CookieManager.getInstance().flush();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Android < 9: trong lúc ở nền có hồ sơ khác lấy quyền sở hữu cookie -> nạp lại cookie
+        // của hồ sơ này rồi dựng lại màn hình (trang Drive được tải lại bằng đăng nhập đúng).
+        if (DriveCookies.enabled() && web != null
+                && !DriveCookies.active(this).equals(suffix())) {
+            DriveCookies.activate(this, suffix());
+            recreate();
+        }
     }
 
     @Override
     protected void onDestroy() {
         tracking = false;
         ui.removeCallbacksAndMessages(null);
+        if (suffix().equals(DriveCookies.uploading())) DriveCookies.setUploading("");
         if (upBox != null && upBox.getVisibility() == View.VISIBLE) {
             // Thoát giữa chừng: dừng dịch vụ nền và dọn thông báo
             try { stopService(new Intent(this, serviceClass())); } catch (Exception ignored) { }

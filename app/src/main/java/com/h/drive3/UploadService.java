@@ -24,6 +24,8 @@ public class UploadService extends Service {
     public static class P1 extends UploadService { }
     public static class P2 extends UploadService { }
     public static class P3 extends UploadService { }
+    /** Dùng cho hồ sơ Legacy (Android < 9) chạy trong process chính. */
+    public static class L extends UploadService { }
 
     static final String CHANNEL = "drive3_upload";
     private static final long MAX_HOLD_MS = 6L * 60 * 60 * 1000; // tối đa 6 giờ

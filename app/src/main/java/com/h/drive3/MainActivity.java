@@ -31,9 +31,10 @@ public class MainActivity extends Activity {
                 new int[]{BG1, BG2}));
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
 
-        root.addView(card("🖼", "Ảnh", 0xFF4FC3F7, 0xFF1565C0, PhotoActivity.class));
-        root.addView(card("🎬", "Video", 0xFFFF8A80, 0xFFC62828, VideoActivity.class));
-        root.addView(card("📁", "Tệp", 0xFF81C784, 0xFF2E7D32, FileActivity.class));
+        // Android < 9 dùng bản Legacy (chung process, đổi cookie); Android 9+ dùng process riêng từng hồ sơ
+        root.addView(card("🖼", "Ảnh", 0xFF4FC3F7, 0xFF1565C0, LegacyActivities.photo()));
+        root.addView(card("🎬", "Video", 0xFFFF8A80, 0xFFC62828, LegacyActivities.video()));
+        root.addView(card("📁", "Tệp", 0xFF81C784, 0xFF2E7D32, LegacyActivities.file()));
 
         setContentView(root);
     }
