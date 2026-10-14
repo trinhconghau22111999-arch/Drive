@@ -72,77 +72,64 @@ public abstract class DriveActivity extends Activity {
 
     private void buildUi() {
         root = new FrameLayout(this);
-
-        LinearLayout main = new LinearLayout(this);
-        main.setOrientation(LinearLayout.HORIZONTAL);
-        main.setBackgroundColor(RAIL_BG);
-
-        LinearLayout rail = new LinearLayout(this);
-        rail.setOrientation(LinearLayout.VERTICAL);
-        rail.setGravity(Gravity.CENTER_HORIZONTAL);
-        rail.setPadding(dp(4), dp(8), dp(4), dp(8));
-        rail.setBackgroundColor(RAIL_BG);
-        main.addView(rail, new LinearLayout.LayoutParams(dp(68), -1));
-
-        TextView tag = new TextView(this);
-        tag.setText(label());
-        tag.setTextColor(Color.WHITE);
-        tag.setTextSize(11);
-        tag.setLetterSpacing(0.1f);
-        tag.setGravity(Gravity.CENTER);
-        GradientDrawable chip = new GradientDrawable();
-        chip.setColor(accent());
-        chip.setCornerRadius(dp(10));
-        tag.setBackground(chip);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(26));
-        tp.setMargins(dp(4), 0, dp(4), dp(6));
-        rail.addView(tag, tp);
-
-        rail.addView(railBtn("⌂", "Chính", false, v -> finish()));
-        rail.addView(railBtn("◀", "Lùi", false, v -> onBackPressed()));
-        rail.addView(railBtn("⟳", "Tải lại", false, v -> web.reload()));
-        rail.addView(railBtn("⬆", "Đồng bộ", true, v -> clickNew(3)));
-
-        FrameLayout content = new FrameLayout(this);
-        main.addView(content, new LinearLayout.LayoutParams(0, -1, 1f));
+        root.setBackgroundColor(0xFF000000);
 
         web = new WebView(this);
-        content.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(web, new FrameLayout.LayoutParams(-1, -1));
 
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100);
         bar.setProgressTintList(ColorStateList.valueOf(accent()));
-        content.addView(bar, new FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP));
+        root.addView(bar, new FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP));
 
-        root.addView(main, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
     }
 
-    private View railBtn(String icon, String text, boolean primary, View.OnClickListener l) {
-        TextView t = new TextView(this);
-        SpannableString sp = new SpannableString(icon + "\n" + text);
-        sp.setSpan(new RelativeSizeSpan(1.7f), 0, icon.length(), 0);
-        t.setText(sp);
-        t.setTextColor(primary ? Color.WHITE : 0xFFC4C7CC);
-        t.setTextSize(10);
-        t.setGravity(Gravity.CENTER);
-        t.setClickable(true);
-        t.setOnClickListener(l);
-
-        GradientDrawable fill = new GradientDrawable();
-        fill.setCornerRadius(dp(16));
-        fill.setColor(primary ? accent() : Color.TRANSPARENT);
-        GradientDrawable mask = new GradientDrawable();
-        mask.setColor(Color.WHITE);
-        mask.setCornerRadius(dp(16));
-        Drawable bg = new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), fill, mask);
-        t.setBackground(bg);
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 0, 1f);
-        lp.setMargins(dp(4), dp(3), dp(4), dp(3));
-        t.setLayoutParams(lp);
-        return t;
+    /**
+     * Chạy trên trang Drive: tự chuyển sang dạng lưới và ẩn phần "Thư mục",
+     * chỉ để lại phần "Tệp". Tìm theo chữ tiêu đề nên không phụ thuộc tên class của Drive.
+     */
+    private static final String TIDY_JS = """
+(function(){
+  if(window.__d3) return; window.__d3=true;
+  var gridDone=false;
+  function txt(e){return (e.innerText||'').trim().toLowerCase();}
+  function leaf(labels, after){
+    var all=document.body.getElementsByTagName('*');
+    for(var i=0;i<all.length;i++){
+      var e=all[i];
+      if(e.children.length!==0) continue;
+      if(labels.indexOf(txt(e))<0) continue;
+      if(after && !(after.compareDocumentPosition(e) & 4)) continue;
+      return e;
     }
+    return null;
+  }
+  function hideFolders(){
+    var f=leaf(['folders','thư mục']);
+    if(!f) return;
+    var g=leaf(['files','tệp'], f);
+    if(!g) return;
+    var p=f;
+    while(p.parentElement && !p.parentElement.contains(g)) p=p.parentElement;
+    if(p!==document.body && !p.contains(g)) p.style.setProperty('display','none','important');
+  }
+  function ensureGrid(){
+    if(gridDone) return;
+    var n=document.querySelectorAll('[aria-label],[data-tooltip]');
+    for(var i=0;i<n.length;i++){
+      var e=n[i];
+      var t=(e.getAttribute('aria-label')||e.getAttribute('data-tooltip')||'').toLowerCase();
+      var toGrid=(t.indexOf('grid')>=0&&t.indexOf('switch')>=0)||(t.indexOf('lưới')>=0&&t.indexOf('chuyển')>=0);
+      if(toGrid){e.click();gridDone=true;return;}
+    }
+  }
+  setInterval(function(){
+    if(!document.body) return;
+    try{hideFolders();ensureGrid();}catch(x){}
+  },800);
+})();
+""";
 
     private void setupWebView() {
         WebSettings s = web.getSettings();
@@ -175,6 +162,9 @@ public abstract class DriveActivity extends Activity {
             public void onPageFinished(WebView v, String url) {
                 bar.setVisibility(View.GONE);
                 CookieManager.getInstance().flush();
+                if (url != null && "drive.google.com".equals(Uri.parse(url).getHost())) {
+                    web.evaluateJavascript(TIDY_JS, null);
+                }
                 // Bấm "Đồng bộ" từ màn hình chính: khi vào tới trang Drive thì tự bấm nút "Mới".
                 if (autoNew && url != null
                         && "drive.google.com".equals(Uri.parse(url).getHost())) {
