@@ -14,8 +14,21 @@ android {
         versionName '1.0'
     }
 
+    signingConfigs {
+        fixed {
+            storeFile file('drive3.keystore')
+            storePassword 'android'
+            keyAlias 'drive3'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
         release {
+            signingConfig signingConfigs.fixed
             minifyEnabled false
         }
     }
