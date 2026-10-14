@@ -2,6 +2,7 @@ package com.h.drive3;
 
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
@@ -42,6 +43,7 @@ public abstract class DriveActivity extends Activity {
     protected abstract String startUrl();
     protected abstract String label();
     protected abstract int accent();
+    protected abstract String pickType();
 
     private static final int RC_CHOOSER = 12;
     private static final int RAIL_BG = 0xFF16181D;
@@ -52,7 +54,9 @@ public abstract class DriveActivity extends Activity {
     private View customView;
     private WebChromeClient.CustomViewCallback customCb;
     private ValueCallback<Uri[]> chooserCb;
-    private boolean autoNew;
+    private Uri[] pending;
+    private boolean pageReady;
+    private boolean uploadStarted;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -63,11 +67,11 @@ public abstract class DriveActivity extends Activity {
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setNavigationBarColor(RAIL_BG);
-        autoNew = getIntent().getBooleanExtra("sync", false);
 
         buildUi();
         setupWebView();
         web.loadUrl(startUrl());
+        if (getIntent().getBooleanExtra("sync", false)) pickFiles();
     }
 
     private void buildUi() {
@@ -207,12 +211,12 @@ public abstract class DriveActivity extends Activity {
                 CookieManager.getInstance().flush();
                 if (url != null && "drive.google.com".equals(Uri.parse(url).getHost())) {
                     web.evaluateJavascript(TIDY_JS, null);
-                }
-                // Bấm "Đồng bộ" từ màn hình chính: khi vào tới trang Drive thì tự bấm nút "Mới".
-                if (autoNew && url != null
-                        && "drive.google.com".equals(Uri.parse(url).getHost())) {
-                    autoNew = false;
-                    web.postDelayed(() -> clickNew(6), 1000);
+                    pageReady = true;
+                    // Đã chọn tệp từ máy: vào tới trang Drive thì tự bấm Mới -> Tải tệp lên.
+                    if (pending != null && !uploadStarted) {
+                        uploadStarted = true;
+                        web.postDelayed(() -> runUpload(), 1500);
+                    }
                 }
             }
         });
@@ -227,6 +231,13 @@ public abstract class DriveActivity extends Activity {
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb,
                                              FileChooserParams params) {
                 if (chooserCb != null) chooserCb.onReceiveValue(null);
+                chooserCb = null;
+                if (pending != null) {
+                    cb.onReceiveValue(pending);
+                    pending = null;
+                    toast("Đang tải lên Drive…");
+                    return true;
+                }
                 chooserCb = cb;
                 try {
                     startActivityForResult(params.createIntent(), RC_CHOOSER);
@@ -272,27 +283,67 @@ public abstract class DriveActivity extends Activity {
         });
     }
 
-    /**
-     * "Đồng bộ" = bấm nút "Mới" trên trang Google Drive (menu Tải tệp lên / Tạo thư mục…).
-     * Thử lại nhiều lần vì Drive là trang tải động.
-     */
-    private void clickNew(final int tries) {
-        String js = "(function(){"
-                + "var L=['new','mới','tạo mới'];"
-                + "var n=document.querySelectorAll("
-                + "'[aria-label],[data-tooltip],div[role=button],button');"
-                + "for(var i=0;i<n.length;i++){var e=n[i];"
-                + "var t=(e.getAttribute('aria-label')||e.getAttribute('data-tooltip')||e.innerText||'')"
-                + ".trim().toLowerCase();"
-                + "for(var j=0;j<L.length;j++){"
-                + "if(t===L[j]||t.endsWith('\\n'+L[j])){e.click();return true;}}}"
-                + "return false;})();";
+    private static final int RC_PICK = 11;
+
+    private static final String CLICK_NEW_JS = """
+(function(){
+  var L=['new','mới','tạo mới'];
+  var n=document.querySelectorAll('[aria-label],[data-tooltip],div[role=button],button');
+  for(var i=0;i<n.length;i++){
+    var e=n[i];
+    var t=(e.getAttribute('aria-label')||e.getAttribute('data-tooltip')||e.innerText||'').trim().toLowerCase();
+    for(var j=0;j<L.length;j++){
+      if(t===L[j]||t.endsWith('\\n'+L[j])){e.click();return true;}
+    }
+  }
+  return false;
+})();
+""";
+
+    private static final String CLICK_UPLOAD_JS = """
+(function(){
+  var L=['file upload','tải tệp lên','upload files','upload file','tải lên tệp','upload','tải lên'];
+  var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null),n;
+  while((n=w.nextNode())){
+    var t=(n.nodeValue||'').replace(/\\s+/g,' ').trim().toLowerCase();
+    if(L.indexOf(t)<0) continue;
+    var e=n.parentElement; if(!e) continue;
+    var c=e.closest('[role=menuitem],[role=button],button,li')||e;
+    c.click(); return true;
+  }
+  return false;
+})();
+""";
+
+    /** Chọn tệp trong máy, lọc theo mục: ảnh / video / tệp. */
+    private void pickFiles() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType(pickType());
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try {
+            startActivityForResult(i, RC_PICK);
+        } catch (Exception e) {
+            toast("Không mở được trình chọn tệp");
+        }
+    }
+
+    /** Tự bấm "Mới" rồi "Tải tệp lên"; Drive gọi hộp chọn tệp thì ta đưa tệp đã chọn vào. */
+    private void runUpload() {
+        clickStep(CLICK_NEW_JS, 8, () -> clickStep(CLICK_UPLOAD_JS, 6, null));
+    }
+
+    private void clickStep(final String js, final int tries, final Runnable next) {
+        if (pending == null) return; // tệp đã được giao cho Drive
         web.evaluateJavascript(js, v -> {
-            if ("true".equals(v)) return;
+            if ("true".equals(v)) {
+                if (next != null) web.postDelayed(next, 800);
+                return;
+            }
             if (tries > 0) {
-                web.postDelayed(() -> clickNew(tries - 1), 1000);
-            } else {
-                toast("Chưa thấy nút Mới – hãy đăng nhập hoặc bấm tay");
+                web.postDelayed(() -> clickStep(js, tries - 1, next), 800);
+            } else if (pending != null) {
+                toast("Chưa tự bấm được – hãy bấm Mới → Tải tệp lên, tệp đã chọn sẽ được gửi");
             }
         });
     }
@@ -300,10 +351,33 @@ public abstract class DriveActivity extends Activity {
     @Override
     protected void onActivityResult(int rc, int res, Intent data) {
         super.onActivityResult(rc, res, data);
-        if (rc == RC_CHOOSER && chooserCb != null) {
+        if (rc == RC_PICK) {
+            if (res == RESULT_OK && data != null) {
+                Uri[] u = parse(data);
+                if (u != null && u.length > 0) {
+                    pending = u;
+                    uploadStarted = false;
+                    toast("Đã chọn " + u.length + " tệp – đang gửi lên Drive");
+                    if (pageReady) {
+                        uploadStarted = true;
+                        runUpload();
+                    }
+                }
+            }
+        } else if (rc == RC_CHOOSER && chooserCb != null) {
             chooserCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
             chooserCb = null;
         }
+    }
+
+    private Uri[] parse(Intent d) {
+        ClipData c = d.getClipData();
+        if (c != null) {
+            Uri[] u = new Uri[c.getItemCount()];
+            for (int i = 0; i < u.length; i++) u[i] = c.getItemAt(i).getUri();
+            return u;
+        }
+        return d.getData() != null ? new Uri[]{d.getData()} : null;
     }
 
     @Override
