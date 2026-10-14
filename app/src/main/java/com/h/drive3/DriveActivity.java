@@ -2,12 +2,18 @@ package com.h.drive3;
 
 import android.app.Activity;
 import android.app.DownloadManager;
-import android.content.ClipData;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.text.SpannableString;
+import android.text.style.RelativeSizeSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -16,10 +22,10 @@ import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.webkit.WebResourceRequest;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -34,11 +40,11 @@ public abstract class DriveActivity extends Activity {
 
     protected abstract String suffix();
     protected abstract String startUrl();
-    protected abstract String pickType();
     protected abstract String label();
+    protected abstract int accent();
 
-    private static final int RC_PICK = 11;
     private static final int RC_CHOOSER = 12;
+    private static final int RAIL_BG = 0xFF16181D;
 
     private WebView web;
     private ProgressBar bar;
@@ -46,8 +52,7 @@ public abstract class DriveActivity extends Activity {
     private View customView;
     private WebChromeClient.CustomViewCallback customCb;
     private ValueCallback<Uri[]> chooserCb;
-    private Uri[] pending;
-    private boolean triedAuto;
+    private boolean autoNew;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -57,11 +62,12 @@ public abstract class DriveActivity extends Activity {
         } catch (IllegalStateException ignored) { }
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        getWindow().setNavigationBarColor(RAIL_BG);
+        autoNew = getIntent().getBooleanExtra("sync", false);
+
         buildUi();
         setupWebView();
-
         web.loadUrl(startUrl());
-        if (getIntent().getBooleanExtra("sync", false)) pickFiles();
     }
 
     private void buildUi() {
@@ -69,25 +75,33 @@ public abstract class DriveActivity extends Activity {
 
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.HORIZONTAL);
-        main.setBackgroundColor(0xFF202124);
+        main.setBackgroundColor(RAIL_BG);
 
-        // Thanh dọc bên trái: tận dụng chiều ngang, nhường tối đa chiều cao cho Drive
         LinearLayout rail = new LinearLayout(this);
         rail.setOrientation(LinearLayout.VERTICAL);
-        rail.setBackgroundColor(0xFF202124);
-        main.addView(rail, new LinearLayout.LayoutParams(dp(64), -1));
+        rail.setGravity(Gravity.CENTER_HORIZONTAL);
+        rail.setPadding(dp(4), dp(8), dp(4), dp(8));
+        rail.setBackgroundColor(RAIL_BG);
+        main.addView(rail, new LinearLayout.LayoutParams(dp(68), -1));
 
         TextView tag = new TextView(this);
         tag.setText(label());
-        tag.setTextColor(0xFF8AB4F8);
-        tag.setTextSize(12);
+        tag.setTextColor(Color.WHITE);
+        tag.setTextSize(11);
+        tag.setLetterSpacing(0.1f);
         tag.setGravity(Gravity.CENTER);
-        rail.addView(tag, new LinearLayout.LayoutParams(-1, dp(28)));
+        GradientDrawable chip = new GradientDrawable();
+        chip.setColor(accent());
+        chip.setCornerRadius(dp(10));
+        tag.setBackground(chip);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, dp(26));
+        tp.setMargins(dp(4), 0, dp(4), dp(6));
+        rail.addView(tag, tp);
 
-        rail.addView(railBtn("⌂", "Chính", v -> finish()));
-        rail.addView(railBtn("◀", "Lùi", v -> onBackPressed()));
-        rail.addView(railBtn("⟳", "Tải lại", v -> web.reload()));
-        rail.addView(railBtn("⬆", "Đồng bộ", v -> pickFiles()));
+        rail.addView(railBtn("⌂", "Chính", false, v -> finish()));
+        rail.addView(railBtn("◀", "Lùi", false, v -> onBackPressed()));
+        rail.addView(railBtn("⟳", "Tải lại", false, v -> web.reload()));
+        rail.addView(railBtn("⬆", "Đồng bộ", true, v -> clickNew(3)));
 
         FrameLayout content = new FrameLayout(this);
         main.addView(content, new LinearLayout.LayoutParams(0, -1, 1f));
@@ -97,21 +111,36 @@ public abstract class DriveActivity extends Activity {
 
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100);
+        bar.setProgressTintList(ColorStateList.valueOf(accent()));
         content.addView(bar, new FrameLayout.LayoutParams(-1, dp(3), Gravity.TOP));
 
         root.addView(main, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
     }
 
-    private View railBtn(String icon, String text, View.OnClickListener l) {
+    private View railBtn(String icon, String text, boolean primary, View.OnClickListener l) {
         TextView t = new TextView(this);
-        t.setText(icon + "\n" + text);
-        t.setTextColor(0xFFE8EAED);
-        t.setTextSize(13);
+        SpannableString sp = new SpannableString(icon + "\n" + text);
+        sp.setSpan(new RelativeSizeSpan(1.7f), 0, icon.length(), 0);
+        t.setText(sp);
+        t.setTextColor(primary ? Color.WHITE : 0xFFC4C7CC);
+        t.setTextSize(10);
         t.setGravity(Gravity.CENTER);
         t.setClickable(true);
         t.setOnClickListener(l);
-        t.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        GradientDrawable fill = new GradientDrawable();
+        fill.setCornerRadius(dp(16));
+        fill.setColor(primary ? accent() : Color.TRANSPARENT);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setColor(Color.WHITE);
+        mask.setCornerRadius(dp(16));
+        Drawable bg = new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), fill, mask);
+        t.setBackground(bg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        lp.setMargins(dp(4), dp(3), dp(4), dp(3));
+        t.setLayoutParams(lp);
         return t;
     }
 
@@ -146,10 +175,11 @@ public abstract class DriveActivity extends Activity {
             public void onPageFinished(WebView v, String url) {
                 bar.setVisibility(View.GONE);
                 CookieManager.getInstance().flush();
-                if (pending != null && !triedAuto && url != null
-                        && url.contains("drive.google.com")) {
-                    triedAuto = true;
-                    web.postDelayed(() -> tryAutoUpload(), 1500);
+                // Bấm "Đồng bộ" từ màn hình chính: khi vào tới trang Drive thì tự bấm nút "Mới".
+                if (autoNew && url != null
+                        && "drive.google.com".equals(Uri.parse(url).getHost())) {
+                    autoNew = false;
+                    web.postDelayed(() -> clickNew(6), 1000);
                 }
             }
         });
@@ -164,13 +194,6 @@ public abstract class DriveActivity extends Activity {
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb,
                                              FileChooserParams params) {
                 if (chooserCb != null) chooserCb.onReceiveValue(null);
-                chooserCb = null;
-                if (pending != null) {
-                    cb.onReceiveValue(pending);
-                    pending = null;
-                    toast("Đang tải lên Drive…");
-                    return true;
-                }
                 chooserCb = cb;
                 try {
                     startActivityForResult(params.createIntent(), RC_CHOOSER);
@@ -216,65 +239,38 @@ public abstract class DriveActivity extends Activity {
         });
     }
 
-    /** Chọn tệp trong máy (lọc theo mục: ảnh / video / tệp). */
-    private void pickFiles() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType(pickType());
-        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        try {
-            startActivityForResult(i, RC_PICK);
-        } catch (Exception e) {
-            toast("Không mở được trình chọn tệp");
-        }
-    }
-
     /**
-     * Cố gắng tự bấm "Mới → Tải tệp lên" trên giao diện Drive.
-     * Nếu Drive đổi giao diện/ngôn ngữ không khớp thì bấm tay: tệp đã chọn vẫn được
-     * trao cho hộp thoại chọn tệp ngay khi Drive mở nó.
+     * "Đồng bộ" = bấm nút "Mới" trên trang Google Drive (menu Tải tệp lên / Tạo thư mục…).
+     * Thử lại nhiều lần vì Drive là trang tải động.
      */
-    private void tryAutoUpload() {
+    private void clickNew(final int tries) {
         String js = "(function(){"
-                + "function clk(labels){var n=document.querySelectorAll("
-                + "'[aria-label],[data-tooltip],div[role=button],div[role=menuitem],button');"
+                + "var L=['new','mới','tạo mới'];"
+                + "var n=document.querySelectorAll("
+                + "'[aria-label],[data-tooltip],div[role=button],button');"
                 + "for(var i=0;i<n.length;i++){var e=n[i];"
                 + "var t=(e.getAttribute('aria-label')||e.getAttribute('data-tooltip')||e.innerText||'')"
                 + ".trim().toLowerCase();"
-                + "if(labels.indexOf(t)>=0){e.click();return true;}}return false;}"
-                + "if(clk(['new','mới','upload','tải lên'])){"
-                + "setTimeout(function(){clk(['file upload','tải tệp lên','upload files','upload file','tải lên tệp']);},700);}"
-                + "})();";
-        web.evaluateJavascript(js, null);
+                + "for(var j=0;j<L.length;j++){"
+                + "if(t===L[j]||t.endsWith('\\n'+L[j])){e.click();return true;}}}"
+                + "return false;})();";
+        web.evaluateJavascript(js, v -> {
+            if ("true".equals(v)) return;
+            if (tries > 0) {
+                web.postDelayed(() -> clickNew(tries - 1), 1000);
+            } else {
+                toast("Chưa thấy nút Mới – hãy đăng nhập hoặc bấm tay");
+            }
+        });
     }
 
     @Override
     protected void onActivityResult(int rc, int res, Intent data) {
         super.onActivityResult(rc, res, data);
-        if (rc == RC_PICK) {
-            if (res == RESULT_OK && data != null) {
-                Uri[] u = parse(data);
-                if (u != null && u.length > 0) {
-                    pending = u;
-                    triedAuto = false;
-                    toast("Đã chọn " + u.length + " tệp – đang mở hộp tải lên của Drive");
-                    tryAutoUpload();
-                }
-            }
-        } else if (rc == RC_CHOOSER && chooserCb != null) {
+        if (rc == RC_CHOOSER && chooserCb != null) {
             chooserCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
             chooserCb = null;
         }
-    }
-
-    private Uri[] parse(Intent d) {
-        ClipData c = d.getClipData();
-        if (c != null) {
-            Uri[] u = new Uri[c.getItemCount()];
-            for (int i = 0; i < u.length; i++) u[i] = c.getItemAt(i).getUri();
-            return u;
-        }
-        return d.getData() != null ? new Uri[]{d.getData()} : null;
     }
 
     @Override
