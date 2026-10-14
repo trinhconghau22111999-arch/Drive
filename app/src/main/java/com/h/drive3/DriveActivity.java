@@ -92,41 +92,65 @@ public abstract class DriveActivity extends Activity {
     private static final String TIDY_JS = """
 (function(){
   if(window.__d3) return; window.__d3=true;
-  var gridDone=false;
-  function txt(e){return (e.innerText||'').trim().toLowerCase();}
-  function leaf(labels, after){
-    var all=document.body.getElementsByTagName('*');
-    for(var i=0;i<all.length;i++){
-      var e=all[i];
-      if(e.children.length!==0) continue;
-      if(labels.indexOf(txt(e))<0) continue;
+  var gridDone=false, promoClicked=false;
+  function norm(s){return (s||'').replace(/\\s+/g,' ').trim().toLowerCase();}
+  function txtOf(e){return norm(e.innerText||e.textContent);}
+  // Tìm phần tử chứa đúng đoạn chữ (duyệt theo text node, không phụ thuộc class của Drive)
+  function find(labels, after){
+    var w=document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var n;
+    while((n=w.nextNode())){
+      if(labels.indexOf(norm(n.nodeValue))<0) continue;
+      var e=n.parentElement;
+      if(!e) continue;
       if(after && !(after.compareDocumentPosition(e) & 4)) continue;
       return e;
     }
     return null;
   }
+  function hide(e){
+    if(e && e!==document.body && e!==document.documentElement)
+      e.style.setProperty('display','none','important');
+  }
+  // Ẩn nguyên 1 dòng menu có chữ này
+  function hideRow(labels){
+    var e=find(labels);
+    if(!e) return;
+    var t=txtOf(e), p=e;
+    while(p.parentElement && p.parentElement!==document.body && txtOf(p.parentElement)===t) p=p.parentElement;
+    hide(p);
+  }
+  // Bảng đề xuất "Tải ứng dụng Drive": ẩn và bấm "Không, cảm ơn" một lần
+  function hidePromo(){
+    var btn=find(['không, cảm ơn','no, thanks','no thanks']);
+    if(!btn) return;
+    var box=null, el=btn;
+    while(el && el!==document.body){
+      var role=el.getAttribute('role');
+      if(getComputedStyle(el).position==='fixed'||role==='dialog'||role==='alertdialog'){box=el;break;}
+      el=el.parentElement;
+    }
+    if(box && txtOf(box).length>=300) box=null;
+    if(!box){
+      var h=find(['tải ứng dụng drive','get the drive app']);
+      if(h){
+        var p=h;
+        while(p.parentElement && !p.parentElement.contains(btn)) p=p.parentElement;
+        box=p.parentElement;
+        if(box && txtOf(box).length>=300) box=null;
+      }
+    }
+    hide(box);
+    if(!promoClicked){promoClicked=true;try{btn.click();}catch(x){}}
+  }
   function hideFolders(){
-    var f=leaf(['folders','thư mục']);
+    var f=find(['folders','thư mục']);
     if(!f) return;
-    var g=leaf(['files','tệp'], f);
+    var g=find(['files','tệp'], f);
     if(!g) return;
     var p=f;
     while(p.parentElement && !p.parentElement.contains(g)) p=p.parentElement;
-    if(p!==document.body && !p.contains(g)) p.style.setProperty('display','none','important');
-  }
-  var promoClicked=false;
-  function hidePromo(){
-    var btn=leaf(['không, cảm ơn','no, thanks','no thanks']);
-    if(!btn) return;
-    var h=leaf(['tải ứng dụng drive','get the drive app']);
-    if(h){
-      var p=h;
-      while(p.parentElement && !p.parentElement.contains(btn)) p=p.parentElement;
-      var box=p.parentElement;
-      if(box && box!==document.body && box!==document.documentElement)
-        box.style.setProperty('display','none','important');
-    }
-    if(!promoClicked){promoClicked=true;try{btn.click();}catch(x){}}
+    if(p!==document.body && !p.contains(g)) hide(p);
   }
   function ensureGrid(){
     if(gridDone) return;
@@ -140,8 +164,13 @@ public abstract class DriveActivity extends Activity {
   }
   setInterval(function(){
     if(!document.body) return;
-    try{hidePromo();hideFolders();ensureGrid();}catch(x){}
-  },800);
+    try{
+      hidePromo();
+      hideRow(['tải ứng dụng google drive','get the drive app','get drive for desktop']);
+      hideFolders();
+      ensureGrid();
+    }catch(x){}
+  },900);
 })();
 """;
 
