@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
         c.addView(t, tp);
 
         TextView sync = new TextView(this);
-        sync.setText("⬆  Đồng bộ");
+        sync.setText("⬆  Tải lên");
         sync.setTextColor(c2);
         sync.setTextSize(15);
         sync.setTypeface(Typeface.DEFAULT_BOLD);
