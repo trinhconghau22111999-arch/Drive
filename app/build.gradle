@@ -8,10 +8,12 @@ android {
 
     defaultConfig {
         applicationId 'com.h.drive3'
-        minSdk 28
+        // Android 7.1.1 = API 25. App chỉ có mã Java (không có thư viện native)
+        // nên cùng 1 file APK chạy được trên ARM 32/64-bit và x86/x86_64.
+        minSdk 25
         targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1'
     }
 
     signingConfigs {

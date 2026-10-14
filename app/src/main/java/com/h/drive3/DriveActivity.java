@@ -1,9 +1,18 @@
 package com.h.drive3;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.NotificationManager;
 import android.content.ClipData;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.OpenableColumns;
+import java.util.ArrayList;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -59,12 +68,30 @@ public abstract class DriveActivity extends Activity {
     private boolean pageReady;
     private boolean uploadStarted;
 
+    // --- Theo dõi tiến độ tải lên ---
+    private LinearLayout upBox;
+    private TextView upText;
+    private ProgressBar upBar;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private boolean tracking;
+    private boolean sawBusy;
+    private int idlePolls;
+    private int stalePolls;
+    private long lastBytes;
+    private long totalBytes;
+    private int fileCount;
+    private boolean askedPerms;
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        try {
-            WebView.setDataDirectorySuffix(suffix());
-        } catch (IllegalStateException ignored) { }
+        // setDataDirectorySuffix chỉ có từ Android 9 (API 28). Android 7.1.1 không có hàm này:
+        // gọi thẳng sẽ văng app, nên phải kiểm tra phiên bản.
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                WebView.setDataDirectorySuffix(suffix());
+            } catch (IllegalStateException ignored) { }
+        }
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setNavigationBarColor(RAIL_BG);
@@ -73,6 +100,25 @@ public abstract class DriveActivity extends Activity {
         setupWebView();
         web.loadUrl(startUrl());
         if (getIntent().getBooleanExtra("sync", false)) pickFiles();
+        else askPerms();
+    }
+
+    /** Xin quyền thông báo (Android 13+) và ghi thư mục Download (Android 7–9). */
+    private void askPerms() {
+        if (askedPerms || Build.VERSION.SDK_INT < 23) return;
+        askedPerms = true;
+        ArrayList<String> need = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (Build.VERSION.SDK_INT <= 28
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        if (!need.isEmpty()) requestPermissions(need.toArray(new String[0]), 21);
     }
 
     private void buildUi() {
@@ -109,7 +155,211 @@ public abstract class DriveActivity extends Activity {
         bp.topMargin = dp(6);
         root.addView(back, bp);
 
+        // Khung tiến độ tải lên ở đáy màn hình (ẩn cho tới khi có tệp đang tải)
+        upBox = new LinearLayout(this);
+        upBox.setOrientation(LinearLayout.VERTICAL);
+        upBox.setPadding(dp(14), dp(8), dp(14), dp(8));
+        GradientDrawable upBg = new GradientDrawable();
+        upBg.setColor(0xE6202124);
+        upBg.setCornerRadius(dp(14));
+        upBox.setBackground(upBg);
+        upBox.setElevation(dp(6));
+        upBox.setVisibility(View.GONE);
+
+        upText = new TextView(this);
+        upText.setTextColor(Color.WHITE);
+        upText.setTextSize(14);
+        upText.setTypeface(Typeface.DEFAULT_BOLD);
+        upBox.addView(upText, new LinearLayout.LayoutParams(-2, -2));
+
+        upBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        upBar.setMax(100);
+        upBar.setProgressTintList(ColorStateList.valueOf(accent()));
+        LinearLayout.LayoutParams ubp = new LinearLayout.LayoutParams(-1, dp(6));
+        ubp.topMargin = dp(6);
+        upBox.addView(upBar, ubp);
+
+        FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(dp(300), -2,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        boxLp.bottomMargin = dp(12);
+        root.addView(upBox, boxLp);
+
         setContentView(root);
+    }
+
+    // ================= Tiến độ tải lên =================
+
+    /**
+     * Chạy trong trang Drive: đếm số byte đã gửi (qua XHR upload) và đọc dòng trạng thái
+     * "Đang tải N mục lên / Upload complete" của Drive. Trả về chuỗi "bận|xong|lỗi|byte".
+     */
+    private static final String UP_JS = """
+(function(){
+  if(window.__d3u) return;
+  var done=0, live={}, id=0;
+  try{
+    var P=XMLHttpRequest.prototype, send=P.send;
+    P.send=function(body){
+      try{
+        if(body && this.upload){
+          var k=++id, x=this;
+          live[k]=0;
+          x.upload.addEventListener('progress',function(e){live[k]=e.loaded||0;});
+          x.addEventListener('loadend',function(){done+=(live[k]||0);delete live[k];});
+        }
+      }catch(e){}
+      return send.apply(this,arguments);
+    };
+  }catch(e){}
+  var rb=/^(uploading|đang tải)/i;
+  var rd=/(upload complete|uploads complete|tải lên xong|đã tải lên|đã tải .* lên|tải lên hoàn tất)/i;
+  var rf=/(upload failed|uploads failed|tải lên không thành công|không tải lên được|tải lên thất bại)/i;
+  window.__d3reset=function(){done=0;live={};};
+  window.__d3u=function(){
+    var b=0,d=0,f=0,l=done,k;
+    for(k in live) l+=live[k];
+    try{
+      var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null),n,c=0;
+      while((n=w.nextNode()) && c++<30000){
+        var t=n.nodeValue;
+        if(!t||t.length>90) continue;
+        t=t.replace(/\\s+/g,' ').trim();
+        if(rb.test(t)) b=1;
+        else if(rf.test(t)) f=1;
+        else if(rd.test(t)) d=1;
+      }
+    }catch(e){}
+    return b+'|'+d+'|'+f+'|'+l;
+  };
+})();
+""";
+
+    private long sizeOf(Uri u) {
+        try (Cursor c = getContentResolver().query(u, new String[]{OpenableColumns.SIZE},
+                null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+        } catch (Exception ignored) { }
+        return 0;
+    }
+
+    private int notifId() {
+        return 2000 + 2 * (suffix().hashCode() & 0x3FF);
+    }
+
+    private Class<?> serviceClass() {
+        switch (suffix()) {
+            case "anh": return UploadService.P1.class;
+            case "video": return UploadService.P2.class;
+            default: return UploadService.P3.class;
+        }
+    }
+
+    /** Gọi khi tệp đã được giao cho Drive: bật giữ sáng màn hình, dịch vụ nền và thanh tiến độ. */
+    private void beginUpload(Uri[] files) {
+        if (files == null || files.length == 0) return;
+        totalBytes = 0;
+        for (Uri u : files) totalBytes += sizeOf(u);
+        fileCount = files.length;
+        sawBusy = false;
+        idlePolls = 0;
+        stalePolls = 0;
+        lastBytes = 0;
+        web.evaluateJavascript(UP_JS, null);
+        web.evaluateJavascript("if(window.__d3reset)window.__d3reset();", null);
+
+        // Giữ màn hình sáng trong lúc tải
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        // Dịch vụ nền: giữ process + CPU + Wi-Fi, kèm thông báo tiến độ
+        try {
+            Intent si = new Intent(this, serviceClass());
+            si.putExtra("id", notifId());
+            si.putExtra("cls", getClass().getName());
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(si);
+            else startService(si);
+        } catch (Exception ignored) { }
+
+        showProgress(-1);
+        if (!tracking) {
+            tracking = true;
+            ui.postDelayed(poll, 1000);
+        }
+    }
+
+    private final Runnable poll = new Runnable() {
+        @Override
+        public void run() {
+            if (!tracking) return;
+            web.evaluateJavascript("(window.__d3u?window.__d3u():'')", v -> {
+                if (!tracking) return;
+                handlePoll(v);
+                if (tracking) ui.postDelayed(poll, 1000);
+            });
+        }
+    };
+
+    private void handlePoll(String raw) {
+        if (raw == null) return;
+        String s = raw.replace("\"", "");
+        String[] p = s.split("\\|");
+        if (p.length < 4) {
+            // Trang vừa tải lại, cài lại bộ đếm
+            web.evaluateJavascript(UP_JS, null);
+            return;
+        }
+        boolean busy = "1".equals(p[0]);
+        boolean fin = "1".equals(p[1]);
+        boolean failed = "1".equals(p[2]);
+        long sent = 0;
+        try { sent = Long.parseLong(p[3]); } catch (NumberFormatException ignored) { }
+
+        if (busy) { sawBusy = true; idlePolls = 0; } else idlePolls++;
+        if (sent > lastBytes) { lastBytes = sent; stalePolls = 0; } else stalePolls++;
+
+        int pct = totalBytes > 0 ? (int) Math.min(99, sent * 100 / totalBytes) : -1;
+
+        if (failed && !busy) { finishUpload(false); return; }
+        // Drive đã hiện "xong" và hết dòng "đang tải"
+        if (sawBusy && !busy && (fin || idlePolls >= 4)) { finishUpload(true); return; }
+        // Không thấy dòng trạng thái nhưng đã gửi đủ byte và im lặng một lúc
+        if (!sawBusy && totalBytes > 0 && sent >= totalBytes && idlePolls >= 6) {
+            finishUpload(true);
+            return;
+        }
+        // Bỏ cuộc theo dõi nếu 2 phút không có dấu hiệu nào (Drive không tải, hoặc đổi giao diện)
+        if (!busy && stalePolls >= 120) { finishUpload(sent > 0); return; }
+
+        showProgress(pct);
+    }
+
+    private void showProgress(int pct) {
+        String t = "Đang tải lên " + fileCount + " tệp" + (pct >= 0 ? " · " + pct + "%" : "…");
+        upText.setText(t);
+        upBar.setIndeterminate(pct < 0);
+        if (pct >= 0) upBar.setProgress(pct);
+        upBox.setVisibility(View.VISIBLE);
+        try {
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(
+                    notifId(), UploadService.build(this, getClass().getName(), pct, t, true));
+        } catch (Exception ignored) { }
+    }
+
+    private void finishUpload(boolean ok) {
+        tracking = false;
+        ui.removeCallbacks(poll);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        upBox.setVisibility(View.GONE);
+        try { stopService(new Intent(this, serviceClass())); } catch (Exception ignored) { }
+        try {
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(notifId());
+        } catch (Exception ignored) { }
+        String msg = ok ? "Đã tải lên xong " + fileCount + " tệp" : "Tải lên chưa thành công";
+        toast(msg);
+        try {
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(
+                    notifId() + 1,
+                    UploadService.build(this, getClass().getName(), 100, msg, false));
+        } catch (Exception ignored) { }
     }
 
     /**
@@ -226,6 +476,9 @@ public abstract class DriveActivity extends Activity {
             @Override
             public void onPageStarted(WebView v, String url, Bitmap f) {
                 bar.setVisibility(View.VISIBLE);
+                if (url != null && "drive.google.com".equals(Uri.parse(url).getHost())) {
+                    web.evaluateJavascript(UP_JS, null); // cài bộ đếm tải lên càng sớm càng tốt
+                }
             }
 
             @Override
@@ -233,6 +486,7 @@ public abstract class DriveActivity extends Activity {
                 bar.setVisibility(View.GONE);
                 CookieManager.getInstance().flush();
                 if (url != null && "drive.google.com".equals(Uri.parse(url).getHost())) {
+                    web.evaluateJavascript(UP_JS, null);
                     web.evaluateJavascript(TIDY_JS, null);
                     pageReady = true;
                     // Đã chọn tệp từ máy: vào tới trang Drive thì tự bấm Mới -> Tải tệp lên.
@@ -256,9 +510,11 @@ public abstract class DriveActivity extends Activity {
                 if (chooserCb != null) chooserCb.onReceiveValue(null);
                 chooserCb = null;
                 if (pending != null) {
-                    cb.onReceiveValue(pending);
+                    Uri[] given = pending;
+                    cb.onReceiveValue(given);
                     pending = null;
                     toast("Đang tải lên Drive…");
+                    beginUpload(given);
                     return true;
                 }
                 chooserCb = cb;
@@ -388,9 +644,12 @@ public abstract class DriveActivity extends Activity {
                 }
             }
         } else if (rc == RC_CHOOSER && chooserCb != null) {
-            chooserCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
+            Uri[] chosen = WebChromeClient.FileChooserParams.parseResult(res, data);
+            chooserCb.onReceiveValue(chosen);
             chooserCb = null;
+            beginUpload(chosen); // tự bấm Mới -> Tải tệp lên cũng được theo dõi
         }
+        askPerms();
     }
 
     private Uri[] parse(Intent d) {
@@ -422,6 +681,15 @@ public abstract class DriveActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        tracking = false;
+        ui.removeCallbacksAndMessages(null);
+        if (upBox != null && upBox.getVisibility() == View.VISIBLE) {
+            // Thoát giữa chừng: dừng dịch vụ nền và dọn thông báo
+            try { stopService(new Intent(this, serviceClass())); } catch (Exception ignored) { }
+            try {
+                ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(notifId());
+            } catch (Exception ignored) { }
+        }
         if (web != null) {
             ((ViewGroup) web.getParent()).removeView(web);
             web.destroy();

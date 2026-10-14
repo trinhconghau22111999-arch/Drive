@@ -2,6 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Giữ CPU/Wi-Fi hoạt động và hiện thông báo khi đang tải lên -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 7–9 cần quyền này để DownloadManager lưu vào thư mục Download -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <application
         android:allowBackup="false"
@@ -37,5 +47,22 @@
             android:process=":p3"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+
+        <!-- Dịch vụ nền giữ tải lên: phải cùng process với trang Drive thì process đó mới khó bị hệ thống tắt -->
+        <service
+            android:name=".UploadService$P1"
+            android:process=":p1"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".UploadService$P2"
+            android:process=":p2"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".UploadService$P3"
+            android:process=":p3"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
