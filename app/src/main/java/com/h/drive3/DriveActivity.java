@@ -114,6 +114,20 @@ public abstract class DriveActivity extends Activity {
     while(p.parentElement && !p.parentElement.contains(g)) p=p.parentElement;
     if(p!==document.body && !p.contains(g)) p.style.setProperty('display','none','important');
   }
+  var promoClicked=false;
+  function hidePromo(){
+    var btn=leaf(['không, cảm ơn','no, thanks','no thanks']);
+    if(!btn) return;
+    var h=leaf(['tải ứng dụng drive','get the drive app']);
+    if(h){
+      var p=h;
+      while(p.parentElement && !p.parentElement.contains(btn)) p=p.parentElement;
+      var box=p.parentElement;
+      if(box && box!==document.body && box!==document.documentElement)
+        box.style.setProperty('display','none','important');
+    }
+    if(!promoClicked){promoClicked=true;try{btn.click();}catch(x){}}
+  }
   function ensureGrid(){
     if(gridDone) return;
     var n=document.querySelectorAll('[aria-label],[data-tooltip]');
@@ -126,7 +140,7 @@ public abstract class DriveActivity extends Activity {
   }
   setInterval(function(){
     if(!document.body) return;
-    try{hideFolders();ensureGrid();}catch(x){}
+    try{hidePromo();hideFolders();ensureGrid();}catch(x){}
   },800);
 })();
 """;
